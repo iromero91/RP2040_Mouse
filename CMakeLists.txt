@@ -1,3 +1,19 @@
+# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
+if(WIN32)
+    set(USERHOME $ENV{USERPROFILE})
+else()
+    set(USERHOME $ENV{HOME})
+endif()
+set(sdkVersion 2.2.0)
+set(toolchainVersion 14_2_Rel1)
+set(picotoolVersion 2.2.0)
+set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
+if (EXISTS ${picoVscode})
+    include(${picoVscode})
+endif()
+# ====================================================================================
+set(PICO_BOARD waveshare_rp2040_zero CACHE STRING "Board type")
+
 cmake_minimum_required(VERSION 3.13)
 set(PICO_SDK_FETCH_FROM_GIT on)
 include ($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
@@ -6,13 +22,14 @@ project(rp2040_mouse)
 enable_language( C CXX ASM )
 pico_sdk_init()
 
-include ($ENV{PICO_PIO_USB_DIR}/CMakeLists.txt)
+include (Pico-PIO-USB/CMakeLists.txt)
 
 set(target_name rp2040_mouse)
 add_executable(${target_name})
 
 target_sources(${target_name} PRIVATE
  main.c
+ ${PICO_TINYUSB_PATH}/src/portable/raspberrypi/pio_usb/dcd_pio_usb.c
  ${PICO_TINYUSB_PATH}/src/portable/raspberrypi/pio_usb/hcd_pio_usb.c
  )
 
@@ -37,4 +54,5 @@ target_compile_definitions(${target_name} PRIVATE PIO_USB_USE_TINYUSB)
 target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
 target_link_libraries(${target_name} PRIVATE pico_stdlib pico_multicore pico_pio_usb tinyusb_host)
+
 pico_add_extra_outputs(${target_name})

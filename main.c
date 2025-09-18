@@ -46,6 +46,7 @@
 #include "main.h"
 
 #include "hardware/uart.h"
+#include "hardware/clocks.h"
 #define UART_ID uart0
 #define BAUD_RATE 115200
 #define DATA_BITS 8
@@ -263,9 +264,7 @@ void initialiseHardware(void)
   bi_decl(bi_1pin_with_name(XB_PIN, "X2 Quadrature Output"));
   bi_decl(bi_1pin_with_name(YA_PIN, "Y1 Quadrature Output"));
   bi_decl(bi_1pin_with_name(YB_PIN, "Y2 Quadrature Output"));
-  bi_decl(bi_1pin_with_name(RB_PIN, "Right Mouse Button"));
-  bi_decl(bi_1pin_with_name(MB_PIN, "Middle Mouse Button"));
-  bi_decl(bi_1pin_with_name(LB_PIN, "Left Mouse Button"));
+  bi_decl(bi_1pin_with_name(LB_PIN, "Mouse Button"));
   bi_decl(bi_1pin_with_name(UART_TX_PIN, "UART TX"));
   bi_decl(bi_1pin_with_name(UART_RX_PIN, "UART RX"));
   bi_decl(bi_1pin_with_name(PIO_USB_DP_PIN_DEFAULT, "PIO USB D+"));
@@ -350,24 +349,9 @@ static void processMouse(uint8_t dev_addr, hid_mouse_report_t const *report)
   // Blink status LED
   // gpio_put(STATUS_PIN, 0);
   (void)dev_addr;
-  // Handle scroll wheel
-  if (report->wheel)
-  {
-    gpio_init(MB_PIN);
-    gpio_set_dir(MB_PIN, GPIO_OUT);
-    gpio_put(MB_PIN, 0);
-    processMouseMovement(report->wheel, MOUSEY);
-    sleep_ms(100);
-    DEBUG_PRINT(("Wheel movement %d\r\n", report->wheel));
-  }
-  else
-  {
-    gpio_deinit(MB_PIN);
-  }
-
   // Handle mouse buttons
   // Check for left mouse button
-  if (report->buttons & MOUSE_BUTTON_LEFT)
+  if (report->buttons & (MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT | MOUSE_BUTTON_MIDDLE))
   {
     gpio_init(LB_PIN);
     gpio_set_dir(LB_PIN, GPIO_OUT);
@@ -377,32 +361,6 @@ static void processMouse(uint8_t dev_addr, hid_mouse_report_t const *report)
   else
   {
     gpio_deinit(LB_PIN);
-  }
-
-  // Check for middle mouse button
-  if (report->buttons & MOUSE_BUTTON_MIDDLE)
-  {
-    gpio_init(MB_PIN);
-    gpio_set_dir(MB_PIN, GPIO_OUT);
-    gpio_put(MB_PIN, 0);
-    DEBUG_PRINT(("Middle button press\r\n"));
-  }
-  else
-  {
-    gpio_deinit(MB_PIN);
-  }
-
-  // Check for right mouse button
-  if (report->buttons & MOUSE_BUTTON_RIGHT)
-  {
-    gpio_init(RB_PIN);
-    gpio_set_dir(RB_PIN, GPIO_OUT);
-    gpio_put(RB_PIN, 0);
-    DEBUG_PRINT(("Right button press\r\n"));
-  }
-  else
-  {
-    gpio_deinit(RB_PIN);
   }
 
   // Handle mouse movement

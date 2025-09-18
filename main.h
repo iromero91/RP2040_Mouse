@@ -31,20 +31,17 @@
 // Hardware map
 
 // Quadrature mouse output pins
-// Right mouse button
-#define RB_PIN 6
-// Middle mouse button
-#define MB_PIN 5
 // Left mouse button
-#define LB_PIN 4
+#define LB_PIN 14
 // Y axis output
-#define YA_PIN 2
-#define YB_PIN 3
+#define YB_PIN 15
+#define YA_PIN 26
 // X axis output
-#define XA_PIN 0
-#define XB_PIN 1
+#define XB_PIN 27
+#define XA_PIN 28
+
 // Mouse Status LED
-#define STATUS_PIN 7
+#define STATUS_PIN 0
 
 // Function prototypes
 void initialiseHardware(void);

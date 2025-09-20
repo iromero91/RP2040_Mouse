@@ -76,17 +76,13 @@
 // The mouseDistance variable tracks the current distance the mouse has left to move
 // (this is incremented by the USB mouse reports and decremented by the ISRs as they
 // output the quadrature to the retro host).
-volatile int8_t mouseDirectionX = 0;    // X direction (0 = decrement, 1 = increment)
 volatile int8_t mouseEncoderPhaseX = 0; // X Quadrature phase (0-3)
-
-volatile int8_t mouseDirectionY = 0;    // Y direction (0 = decrement, 1 = increment)
 volatile int8_t mouseEncoderPhaseY = 0; // Y Quadrature phase (0-3)
 
 volatile int16_t mouseDistanceX = 0; // Distance left for mouse to move
 volatile int16_t mouseDistanceY = 0; // Distance left for mouse to move
 
 struct repeating_timer timer1;
-struct repeating_timer timer2;
 
 #ifdef DEBUG
 #define DEBUG_PRINT(x) printf x
@@ -123,73 +119,65 @@ bool timer1_callback(struct repeating_timer *t)
   // Silence compilation warning
   (void)t;
   // Process X output
-  if (mouseDistanceX > 0)
+  if (mouseDistanceX != 0)
   {
-    // Change phase and range check
-    if (mouseDirectionX == 0)
-    {
-      mouseEncoderPhaseX--;
-      if (mouseEncoderPhaseX < 0)
-        mouseEncoderPhaseX = 3;
-    }
-    else
-    {
-      mouseEncoderPhaseX++;
-      if (mouseEncoderPhaseX > 3)
-        mouseEncoderPhaseX = 0;
+    if (mouseDistanceX < 0){
+      mouseEncoderPhaseX = (mouseEncoderPhaseX + 3) % 4;
+      mouseDistanceX++;
+    } else if (mouseDistanceX > 0){
+      mouseEncoderPhaseX = (mouseEncoderPhaseX + 1) % 4;
+      mouseDistanceX--;
     }
 
-    // Set the output pins according to the current phase
-    if (mouseEncoderPhaseX == 0)
-      gpio_put(XA_PIN, 1); // Set X1 to 1
-    if (mouseEncoderPhaseX == 1)
-      gpio_put(XB_PIN, 1); // Set X2 to 1
-    if (mouseEncoderPhaseX == 2)
-      gpio_put(XA_PIN, 0); // Set X1 to 0
-    if (mouseEncoderPhaseX == 3)
-      gpio_put(XB_PIN, 0); // Set X2 to 0
-
-    // Decrement the distance left to move
-    mouseDistanceX--;
+    switch (mouseEncoderPhaseX)
+    {
+    case 0:
+      gpio_put(XA_PIN, 1);
+      gpio_put(XB_PIN, 0);
+      break;
+    case 1:
+      gpio_put(XA_PIN, 1);
+      gpio_put(XB_PIN, 1);
+      break;
+    case 2:
+      gpio_put(XA_PIN, 0);
+      gpio_put(XB_PIN, 1);
+      break;
+    case 3:
+    default:
+      gpio_put(XA_PIN, 0);
+      gpio_put(XB_PIN, 0);
+    }
   }
-
-  return true;
-}
-
-// Interrupt Service Routine based on Timer2 for mouse Y movement quadrature output
-bool timer2_callback(struct repeating_timer *t)
-{
-  // Silence compilation warning
-  (void)t;
   // Process Y output
-  if (mouseDistanceY > 0)
+  if (mouseDistanceY != 0)
   {
-    // Change phase and range check
-    if (mouseDirectionY == 0)
-    {
-      mouseEncoderPhaseY--;
-      if (mouseEncoderPhaseY < 0)
-        mouseEncoderPhaseY = 3;
+    if (mouseDistanceY < 0){
+      mouseEncoderPhaseY = (mouseEncoderPhaseY + 3) % 4;
+      mouseDistanceY++;
+    } else if (mouseDistanceY > 0){
+      mouseEncoderPhaseY = (mouseEncoderPhaseY + 1) % 4;
+      mouseDistanceY--;
     }
-    else
+    switch (mouseEncoderPhaseY) // Y Axis is reversed
     {
-      mouseEncoderPhaseY++;
-      if (mouseEncoderPhaseY > 3)
-        mouseEncoderPhaseY = 0;
+    case 0:
+      gpio_put(YA_PIN, 1);
+      gpio_put(YB_PIN, 0);
+      break;
+    case 1:
+      gpio_put(YA_PIN, 0);
+      gpio_put(YB_PIN, 0);
+      break;
+    case 2:
+      gpio_put(YA_PIN, 0);
+      gpio_put(YB_PIN, 1);
+      break;
+    case 3:
+    default:
+      gpio_put(YA_PIN, 1);
+      gpio_put(YB_PIN, 1);
     }
-
-    // Set the output pins according to the current phase
-    if (mouseEncoderPhaseY == 3)
-      gpio_put(YA_PIN, 0); // Set Y1 to 0
-    if (mouseEncoderPhaseY == 2)
-      gpio_put(YB_PIN, 0); // Set Y2 to 0
-    if (mouseEncoderPhaseY == 1)
-      gpio_put(YA_PIN, 1); // Set Y1 to 1
-    if (mouseEncoderPhaseY == 0)
-      gpio_put(YB_PIN, 1); // Set Y2 to 1
-
-    // Decrement the distance left to move
-    mouseDistanceY--;
   }
   return true;
 }
@@ -320,8 +308,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
     tuh_hid_set_protocol(dev_addr, instance, 1);
     if (tuh_hid_receive_report(dev_addr, instance))
     {
-      add_repeating_timer_ms(-1, timer1_callback, NULL, &timer1);
-      add_repeating_timer_ms(-1, timer2_callback, NULL, &timer2);
+      add_repeating_timer_us(-200, timer1_callback, NULL, &timer1);
       DEBUG_PRINT(("Mouse Timers Running\r\n"));
       blink_status(3);
     }
@@ -336,12 +323,7 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
   (void)instance;
   DEBUG_PRINT(("USB Device Removed\r\n"));
   gpio_put(STATUS_PIN, 0); // Turn status LED off
-  bool cancelled = cancel_repeating_timer(&timer1);
-  DEBUG_PRINT(("Mouse Timer1 Cancelled... %d\r\n", cancelled));
-  (void)cancelled;
-  cancelled = cancel_repeating_timer(&timer2);
-  DEBUG_PRINT(("Mouse Timer2 Cancelled... %d\r\n", cancelled));
-  (void)cancelled;
+  cancel_repeating_timer(&timer1);
 }
 
 static void processMouse(uint8_t dev_addr, hid_mouse_report_t const *report)
@@ -363,36 +345,25 @@ static void processMouse(uint8_t dev_addr, hid_mouse_report_t const *report)
     gpio_deinit(LB_PIN);
   }
 
-  // Handle mouse movement
-  if (report->x > 0 && mouseDirectionX == 0)
+  mouseDistanceX += report->x;
+  mouseDistanceY += report->y;
+  // Limit the maximum buffered movements
+  if (mouseDistanceX > Q_BUFFERLIMIT)
   {
-    mouseDistanceX = 0;
-    mouseDirectionX = 1;
-    DEBUG_PRINT(("Mouse Movement X++\r\n"));
+    mouseDistanceX = Q_BUFFERLIMIT;
   }
-  else if (report->x < 0 && mouseDirectionX == 1)
+  else if (mouseDistanceX < -Q_BUFFERLIMIT)
   {
-    mouseDistanceX = 0;
-    mouseDirectionX = 0;
-    DEBUG_PRINT(("Mouse Movement X--\r\n"));
+    mouseDistanceX = -Q_BUFFERLIMIT;
   }
-
-  if (report->y > 0 && mouseDirectionY == 0)
+  if (mouseDistanceY > Q_BUFFERLIMIT)
   {
-    mouseDistanceY = 0;
-    mouseDirectionY = 1;
-    DEBUG_PRINT(("Mouse Movement Y++\r\n"));
+    mouseDistanceY = Q_BUFFERLIMIT;
   }
-  else if (report->y < 0 && mouseDirectionY == 1)
+  else if (mouseDistanceY < -Q_BUFFERLIMIT)
   {
-    mouseDistanceY = 0;
-    mouseDirectionY = 0;
-    DEBUG_PRINT(("Mouse Movement Y--\r\n"));
+    mouseDistanceY = -Q_BUFFERLIMIT;
   }
-
-  // Process mouse X and Y movement
-  processMouseMovement(report->x, MOUSEX);
-  processMouseMovement(report->y, MOUSEY);
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len)
@@ -413,47 +384,5 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
   if (!tuh_hid_receive_report(dev_addr, instance))
   {
     return;
-  }
-}
-
-// Process the mouse movement units from the USB report
-void processMouseMovement(int8_t movementUnits, uint8_t axis)
-{
-  // Set the mouse movement direction and record the movement units
-  if (movementUnits > 0)
-  {
-    // Moving in the positive direction
-    // Add the movement units to the quadrature output buffer
-    if (axis == MOUSEX)
-      mouseDistanceX += movementUnits;
-    else
-      mouseDistanceY += movementUnits;
-  }
-  else if (movementUnits < 0)
-  {
-    // Moving in the negative direction
-    // Add the movement units to the quadrature output buffer
-    if (axis == MOUSEX)
-      mouseDistanceX += -movementUnits;
-    else
-      mouseDistanceY += -movementUnits;
-  }
-  else
-  {
-    if (axis == MOUSEX)
-      mouseDistanceX = 0;
-    else
-      mouseDistanceY = 0;
-  }
-  // Apply the quadrature output buffer limit
-  if (axis == MOUSEX)
-  {
-    if (mouseDistanceX > Q_BUFFERLIMIT)
-      mouseDistanceX = Q_BUFFERLIMIT;
-  }
-  else
-  {
-    if (mouseDistanceY > Q_BUFFERLIMIT)
-      mouseDistanceY = Q_BUFFERLIMIT;
   }
 }

@@ -232,6 +232,7 @@ int main()
 
   // Initialise the RP2040 hardware
   initialiseHardware();
+  add_repeating_timer_us(-200, timer1_callback, NULL, &timer1);
   DEBUG_PRINT(("Hardware Initalized\r\n"));
 
   // Blink Status LED and wait for everything to settle
@@ -308,7 +309,6 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
     tuh_hid_set_protocol(dev_addr, instance, 1);
     if (tuh_hid_receive_report(dev_addr, instance))
     {
-      add_repeating_timer_us(-200, timer1_callback, NULL, &timer1);
       DEBUG_PRINT(("Mouse Timers Running\r\n"));
       blink_status(3);
     }

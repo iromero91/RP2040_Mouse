@@ -43,6 +43,8 @@
 // Mouse Status LED
 #define STATUS_PIN 0
 
+#define DEBUG 1
+
 // Function prototypes
 void initialiseHardware(void);
 void initialiseTimers(void);

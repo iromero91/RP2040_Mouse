@@ -2,7 +2,8 @@
   main.c
 
   Main functions
-    RP2040 - USB to quadrature mouse converter
+    RP2040 - USB to quadrature mouse and keyboard converter
+    Copyright (C) 2025 Jose I. Romero
     Copyright (C) 2023 Darren Jones
     Copyright (C) 2017-2020 Simon Inns
 
@@ -55,8 +56,218 @@
 #define UART_TX_PIN 12
 #define UART_RX_PIN 13
 
-#define MOUSEX 0
-#define MOUSEY 1
+#ifdef DEBUG
+#define DEBUG_PRINT(x) printf x
+#define CFG_TUSB_DEBUG 3
+#else
+#define DEBUG_PRINT(x) \
+  do                   \
+  {                    \
+  } while (0)
+#define CFG_TUSB_DEBUG 0
+#endif
+
+
+enum KBDCommState {
+  KBD_IDLE,
+  KBD_WAIT_TO_RECEIVE,
+  KBD_READING_COMMAND,
+  KBD_DONE_READING,
+  KBD_WAIT_TO_SEND,
+  KBD_SENDING_RESPONSE
+};
+
+enum KBDCommands {
+  KBD_CMD_INQUIRY = 0x10,
+  KBD_CMD_INSTANT = 0x14,
+  KBD_CMD_GET_MODEL = 0x16,
+  KBD_CMD_TEST = 0x36
+};
+
+const uint8_t kbdTestResponse = 0x7D;
+const uint8_t kbdModel = 0x0B; // M0110A Keyboard
+const uint32_t idleTimeout = 250 / 0.2; // 250ms timeout
+
+
+enum KBDCommState kbdCommState = KBD_IDLE;
+bool kbdClockPhase = false;
+uint8_t kbdShiftBuffer = 0;
+uint8_t kbdShiftBitCount = 0;
+// Keyboard event queue
+uint8_t keyevent_queue[16];
+uint8_t keyevent_head = 0;
+uint8_t keyevent_tail = 0;
+// Idle timeout
+uint32_t idleTime = 0;
+
+hid_keyboard_report_t prev_keyboard_state = {0};
+
+const uint8_t hid_to_m01100a[256] = {
+  [HID_KEY_GRAVE] = 0x65,
+  [HID_KEY_1] = 0x25,
+  [HID_KEY_2] = 0x27,
+  [HID_KEY_3] = 0x29,
+  [HID_KEY_4] = 0x2B,
+  [HID_KEY_5] = 0x2F,
+  [HID_KEY_6] = 0x2D,
+  [HID_KEY_7] = 0x35,
+  [HID_KEY_8] = 0x39,
+  [HID_KEY_9] = 0x33,
+  [HID_KEY_0] = 0x3B,
+  [HID_KEY_MINUS] = 0x37,
+  [HID_KEY_EQUAL] = 0x31,
+  [HID_KEY_BACKSPACE] = 0x67,
+
+  [HID_KEY_TAB] = 0x61,
+  [HID_KEY_Q] = 0x19,
+  [HID_KEY_W] = 0x1B,
+  [HID_KEY_E] = 0x1D,
+  [HID_KEY_R] = 0x1F,
+  [HID_KEY_T] = 0x23,
+  [HID_KEY_Y] = 0x21,
+  [HID_KEY_U] = 0x41,
+  [HID_KEY_I] = 0x45,
+  [HID_KEY_O] = 0x3F,
+  [HID_KEY_P] = 0x47,
+  [HID_KEY_BRACKET_LEFT] = 0x43,
+  [HID_KEY_BRACKET_RIGHT] = 0x3D,
+
+  [HID_KEY_CAPS_LOCK] = 0x73,
+  [HID_KEY_A] = 0x01,
+  [HID_KEY_S] = 0x03,
+  [HID_KEY_D] = 0x05,
+  [HID_KEY_F] = 0x07,
+  [HID_KEY_G] = 0x0B,
+  [HID_KEY_H] = 0x09,
+  [HID_KEY_J] = 0x4D,
+  [HID_KEY_K] = 0x51,
+  [HID_KEY_L] = 0x4B,
+  [HID_KEY_SEMICOLON] = 0x53,
+  [HID_KEY_APOSTROPHE] = 0x4F,
+  [HID_KEY_ENTER] = 0x49,
+
+  [HID_KEY_SHIFT_LEFT] = 0x71,
+  [HID_KEY_Z] = 0x0D,
+  [HID_KEY_X] = 0x0F,
+  [HID_KEY_C] = 0x11,
+  [HID_KEY_V] = 0x13,
+  [HID_KEY_B] = 0x17,
+  [HID_KEY_N] = 0x5B,
+  [HID_KEY_M] = 0x5D,
+  [HID_KEY_COMMA] = 0x27,
+  [HID_KEY_PERIOD] = 0x5F,
+  [HID_KEY_SLASH] = 0x59,
+  [HID_KEY_SHIFT_RIGHT] = 0x71,
+  
+  [HID_KEY_CONTROL_LEFT] = 0x6F,
+  [HID_KEY_CONTROL_RIGHT] = 0x6F,
+  [HID_KEY_GUI_LEFT] = 0x6F,
+  [HID_KEY_GUI_RIGHT] = 0x6F,
+  [HID_KEY_ALT_LEFT] = 0x75,
+  [HID_KEY_ALT_RIGHT] = 0x75,
+  [HID_KEY_SPACE] = 0x63,
+  [HID_KEY_BACKSLASH] = 0x55,
+  // Arrows
+  [HID_KEY_ARROW_UP] = 0x80 | 0x1B,
+  [HID_KEY_ARROW_DOWN] = 0x80 | 0x11,
+  [HID_KEY_ARROW_LEFT] = 0x80 | 0x0D,
+  [HID_KEY_ARROW_RIGHT] = 0x80 | 0x05,
+
+  // Keypad
+  [HID_KEY_KEYPAD_0] = 0x80 | 0x25,
+  [HID_KEY_KEYPAD_1] = 0x80 | 0x27,
+  [HID_KEY_KEYPAD_2] = 0x80 | 0x29,
+  [HID_KEY_KEYPAD_3] = 0x80 | 0x2B,
+  [HID_KEY_KEYPAD_4] = 0x80 | 0x2D,
+  [HID_KEY_KEYPAD_5] = 0x80 | 0x2F,
+  [HID_KEY_KEYPAD_6] = 0x80 | 0x31,
+  [HID_KEY_KEYPAD_7] = 0x80 | 0x33,
+  [HID_KEY_KEYPAD_8] = 0x80 | 0x37,
+  [HID_KEY_KEYPAD_9] = 0x80 | 0x39,
+  [HID_KEY_KEYPAD_ENTER] = 0x80 | 0x19,
+  [HID_KEY_KEYPAD_DECIMAL] = 0x80 | 0x03,
+  [HID_KEY_KEYPAD_CLEAR_ENTRY] = 0x80 | 0x0F,
+  [HID_KEY_KEYPAD_SUBTRACT] = 0x80 | 0x1D,
+};
+
+
+/**
+ * @brief Enqueues a keyboard event for processing.
+ *
+ * This function adds the specified keyboard event to the event queue.
+ * The event parameter typically represents a key press or release,
+ * encoded as a uint8_t value.
+ *
+ * @param event The keyboard event to enqueue.
+ */
+#include "hardware/sync.h"
+
+void kbd_enqueue(uint8_t event) {
+  uint32_t irq_state = save_and_disable_interrupts();
+  uint8_t next_head = (keyevent_head + 1) % sizeof(keyevent_queue);
+  if (next_head != keyevent_tail) { // Check for queue full
+    keyevent_queue[keyevent_head] = event;
+    keyevent_head = next_head;
+  }
+  restore_interrupts(irq_state);
+}
+
+/**
+ * @brief Dequeues a keyboard event for processing.
+ *
+ * This function retrieves and removes the next keyboard event from the event queue.
+ * If the queue is empty, it returns 0.
+ *
+ * @return The next keyboard event, or 0 if the queue is empty.
+ */
+uint8_t kbd_dequeue() {
+  uint32_t irq_state = save_and_disable_interrupts();
+  if (keyevent_head == keyevent_tail) {
+    restore_interrupts(irq_state);
+    return 0; // Queue empty
+  }
+  uint8_t event = keyevent_queue[keyevent_tail];
+  keyevent_tail = (keyevent_tail + 1) % sizeof(keyevent_queue);
+  restore_interrupts(irq_state);
+  return event;
+}
+
+void kbd_enqueue_scancode(uint8_t scancode, uint8_t pressed) {
+  uint8_t mac_code = hid_to_m01100a[scancode];
+  uint8_t pressed_mask = pressed ? 0x00 : 0x80;
+  if (mac_code == 0) {
+    switch (scancode) { // Check for the special shifted keypad keys
+      case HID_KEY_KEYPAD_EQUAL:
+        kbd_enqueue(pressed_mask | 0x71); // Shift
+        kbd_enqueue(0x79);
+        kbd_enqueue(pressed_mask | 0x11);
+        break;
+      case HID_KEY_KEYPAD_ADD:
+        kbd_enqueue(pressed_mask | 0x71);
+        kbd_enqueue(0x79);
+        kbd_enqueue(pressed_mask | 0x0D);
+        break;
+      case HID_KEY_KEYPAD_MULTIPLY:
+        kbd_enqueue(pressed_mask | 0x71);
+        kbd_enqueue(0x79);
+        kbd_enqueue(pressed_mask | 0x05);
+        break;
+      case HID_KEY_KEYPAD_DIVIDE:
+        kbd_enqueue(pressed_mask | 0x71);
+        kbd_enqueue(0x79);
+        kbd_enqueue(pressed_mask | 0x1B);
+        break;
+      default:
+        return; // No mapping for this key, ignore it
+    }
+  } else if (mac_code & 0x80) {
+    // Key is a keypad key. send 0x79 before it
+    kbd_enqueue(0x79);
+    kbd_enqueue(pressed_mask | (mac_code & 0x7F));
+  } else {
+    kbd_enqueue(pressed_mask | mac_code);
+  }
+}
 
 // Quadrature output buffer limit
 //
@@ -84,16 +295,7 @@ volatile int16_t mouseDistanceY = 0; // Distance left for mouse to move
 
 struct repeating_timer timer1;
 
-#ifdef DEBUG
-#define DEBUG_PRINT(x) printf x
-#define CFG_TUSB_DEBUG 3
-#else
-#define DEBUG_PRINT(x) \
-  do                   \
-  {                    \
-  } while (0)
-#define CFG_TUSB_DEBUG 0
-#endif
+
 
 void core1_main()
 {
@@ -103,6 +305,7 @@ void core1_main()
   // Note: tuh_configure() must be called before
   pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
   tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
+  tuh_hid_set_default_protocol(HID_PROTOCOL_REPORT);
 
   // To run USB SOF interrupt in core1, init host stack for pio_usb (roothub
   // port1) on core1
@@ -114,10 +317,14 @@ void core1_main()
   }
 }
 
-bool timer1_callback(struct repeating_timer *t)
+void kbd_send_byte(uint8_t data) {
+  kbdShiftBuffer = data;
+  kbdCommState = KBD_SENDING_RESPONSE;
+  kbdShiftBitCount = 8; // Need to send 8 bits
+}
+
+bool timer1_callback(struct repeating_timer * /* t */)
 {
-  // Silence compilation warning
-  (void)t;
   // Process X output
   if (mouseDistanceX != 0)
   {
@@ -179,6 +386,107 @@ bool timer1_callback(struct repeating_timer *t)
       gpio_put(YB_PIN, 1);
     }
   }
+  switch (kbdCommState) {
+    case KBD_IDLE:
+      gpio_set_dir(KBD_DATA_PIN, GPIO_IN);
+      gpio_put(KBD_CLK_PIN, 1);
+      // On data falling edge, start receiving
+      if (!gpio_get(KBD_DATA_PIN)) {
+        kbdCommState = KBD_WAIT_TO_RECEIVE;
+      }
+      break;
+    case KBD_WAIT_TO_RECEIVE:
+      kbdShiftBitCount = 8; // Need to read 8 bits
+      kbdClockPhase = false; // Start on clock falling edge
+      gpio_put(KBD_CLK_PIN, 0);
+      kbdCommState = KBD_READING_COMMAND;
+      break;
+    case KBD_READING_COMMAND:
+      if (!kbdClockPhase) {
+        // On clock low phase, set clock high and sample data line
+        gpio_put(KBD_CLK_PIN, 1);
+        kbdClockPhase = true;
+        kbdShiftBuffer <<= 1;
+        if (gpio_get(KBD_DATA_PIN)) {
+          kbdShiftBuffer |= 0x01;
+        }
+      } else {
+        // On clock high phase, set clock low if more bits to read
+        if (--kbdShiftBitCount) {
+          // Start next clock cycle
+          gpio_put(KBD_CLK_PIN, 0);
+          kbdClockPhase = false;
+        } else {
+          // Command byte received, send response when macintosh is ready (data line high)
+          kbdCommState = KBD_DONE_READING;
+        }
+      }
+      break;
+    case KBD_DONE_READING:
+      // Macintosh is ready, decide what to send based on command
+      if (gpio_get(KBD_DATA_PIN)) {
+        kbdCommState = KBD_WAIT_TO_SEND;
+      }
+      idleTime = 0;
+      break;
+    case KBD_WAIT_TO_SEND:
+      switch (kbdShiftBuffer) {
+        case KBD_CMD_INQUIRY: { // Blocking request for key event
+          uint8_t event = kbd_dequeue();
+          if (event) { // Only respond if there is an event in the queue
+            kbd_send_byte(event); // Send next key event
+          } else {
+            idleTime++;
+            if (idleTime >= idleTimeout) {
+              kbd_send_byte(0x7B); // Send null event if timed out
+            }
+          }
+          break;
+        }
+        case KBD_CMD_INSTANT: { // Non-blocking request for key event
+          uint8_t event = kbd_dequeue(); // Send next key event or 0 if none
+          if (!event) {
+            event = 0x7B; // Null event
+          }
+          kbd_send_byte(event);
+          break;
+        }
+        case KBD_CMD_GET_MODEL:
+          kbd_send_byte(kbdModel); // Macintosh Plus Keyboard
+          break;
+        case KBD_CMD_TEST:
+          kbd_send_byte(kbdTestResponse); // Always respond with 0x7D
+          break;
+        default:
+          kbd_send_byte(0x7B); // Unknown command
+          break;
+      }
+      break;
+    case KBD_SENDING_RESPONSE:
+      if (!kbdClockPhase) {
+        // On clock low phase, set clock high
+        gpio_put(KBD_CLK_PIN, 1);
+        kbdClockPhase = true;
+        if (--kbdShiftBitCount <= 0) {
+          // All bits sent, go back to waiting for next command
+          kbdCommState = KBD_IDLE;
+          gpio_set_dir(KBD_DATA_PIN, GPIO_IN); // Release data line
+        }
+      } else {
+        // On clock high phase, set clock low and shift out most significant bit
+        if(kbdShiftBuffer & 0x80) {
+          gpio_set_dir(KBD_DATA_PIN, GPIO_IN); // Release data line
+        } else {
+          gpio_set_dir(KBD_DATA_PIN, GPIO_OUT);
+          gpio_put(KBD_DATA_PIN, 0); // Pull data line low
+        }
+        kbdShiftBuffer <<= 1;
+        gpio_put(KBD_CLK_PIN, 0);
+        kbdClockPhase = false;
+      }
+      break;
+  }
+
   return true;
 }
 
@@ -259,6 +567,8 @@ void initialiseHardware(void)
   bi_decl(bi_1pin_with_name(PIO_USB_DP_PIN_DEFAULT, "PIO USB D+"));
   bi_decl(bi_1pin_with_name(PIO_USB_DP_PIN_DEFAULT + 1, "PIO USB D-"));
   bi_decl(bi_1pin_with_name(STATUS_PIN, "Status LED"));
+  bi_decl(bi_1pin_with_name(KBD_CLK_PIN, "Keyboard Clock"));
+  bi_decl(bi_1pin_with_name(KBD_DATA_PIN, "Keyboard Data"));
 
   // Initalize the pins
   gpio_init(XA_PIN);
@@ -266,6 +576,8 @@ void initialiseHardware(void)
   gpio_init(YA_PIN);
   gpio_init(YB_PIN);
   gpio_init(STATUS_PIN);
+  gpio_init(KBD_CLK_PIN);
+  gpio_init(KBD_DATA_PIN);
   DEBUG_PRINT(("Pins initalised\r\n"));
 
   // Set pin directions
@@ -274,6 +586,8 @@ void initialiseHardware(void)
   gpio_set_dir(YA_PIN, GPIO_OUT);
   gpio_set_dir(YB_PIN, GPIO_OUT);
   gpio_set_dir(STATUS_PIN, GPIO_OUT);
+  gpio_set_dir(KBD_CLK_PIN, GPIO_OUT);
+  gpio_set_dir(KBD_DATA_PIN, GPIO_IN);
   DEBUG_PRINT(("Pin directions set\r\n"));
 
   // Set the pins low
@@ -282,6 +596,8 @@ void initialiseHardware(void)
   gpio_put(YA_PIN, 0);
   gpio_put(YB_PIN, 0);
   gpio_put(STATUS_PIN, 0);
+  gpio_put(KBD_CLK_PIN, 1);
+  gpio_put(KBD_DATA_PIN, 0);
   DEBUG_PRINT(("Pins pulled low\r\n"));
 }
 
@@ -305,12 +621,16 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
   // tuh_hid_report_received_cb() will be invoked when report is available
   if (itf_protocol == HID_ITF_PROTOCOL_MOUSE)
   {
-    // Set protocol to full report mode for mouse wheel support
-    tuh_hid_set_protocol(dev_addr, instance, 1);
     if (tuh_hid_receive_report(dev_addr, instance))
     {
       DEBUG_PRINT(("Mouse Timers Running\r\n"));
-      blink_status(3);
+    }
+  }
+  else if (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD)
+  {
+    if (tuh_hid_receive_report(dev_addr, instance))
+    {
+      DEBUG_PRINT(("Keyboard Ready\r\n"));
     }
   }
   gpio_put(STATUS_PIN, 1); // Turn status LED on
@@ -323,7 +643,6 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
   (void)instance;
   DEBUG_PRINT(("USB Device Removed\r\n"));
   gpio_put(STATUS_PIN, 0); // Turn status LED off
-  cancel_repeating_timer(&timer1);
 }
 
 static void processMouse(uint8_t dev_addr, hid_mouse_report_t const *report)
@@ -366,6 +685,54 @@ static void processMouse(uint8_t dev_addr, hid_mouse_report_t const *report)
   }
 }
 
+static void processKeyboard(uint8_t dev_addr, hid_keyboard_report_t const *report)
+{
+  (void)dev_addr;
+  // Compare with previous state to detect changes
+  // Check for key releases
+  for (int i = 0; i < 6; i++) {
+    if (prev_keyboard_state.keycode[i] != 0) {
+      bool still_pressed = false;
+      for (int j = 0; j < 6; j++) {
+        if (report->keycode[j] == prev_keyboard_state.keycode[i]) {
+          still_pressed = true;
+          break;
+        }
+      }
+      if (!still_pressed) {
+        // Key has been released
+        kbd_enqueue_scancode(prev_keyboard_state.keycode[i], 0); // Release event
+      }
+    }
+  }
+  // Check for key presses
+  for (int i = 0; i < 6; i++) {
+    if (report->keycode[i] != 0) {
+      bool already_pressed = false;
+      for (int j = 0; j < 6; j++) {
+        if (prev_keyboard_state.keycode[j] == report->keycode[i]) {
+          already_pressed = true;
+          break;
+        }
+      }
+      if (!already_pressed) {
+        // Key has been pressed
+        kbd_enqueue_scancode(report->keycode[i], 1); // Press event
+      }
+    }
+  }
+  //Handle modifier keys, convert into scan codes
+  uint8_t modifier_changes = report->modifier ^ prev_keyboard_state.modifier;
+  for (int i = 0; i < 8; i++) {
+    if (modifier_changes & (1 << i)) {
+      // Modifier state has changed
+      kbd_enqueue_scancode(0xE0 + i, (report->modifier & (1 << i)) != 0); // Press or release event
+    }
+  }
+  // Save current state as previous state for next comparison
+  prev_keyboard_state = *report;
+}
+
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len)
 {
   (void)len;
@@ -376,6 +743,9 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
     processMouse(dev_addr, (hid_mouse_report_t const *)report);
     break;
 
+  case HID_ITF_PROTOCOL_KEYBOARD:
+    processKeyboard(dev_addr, (hid_keyboard_report_t const *)report);
+    break;
   default:
     break;
   }

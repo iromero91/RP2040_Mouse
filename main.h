@@ -43,7 +43,11 @@
 // Mouse Status LED
 #define STATUS_PIN 0
 
-#define DEBUG 1
+// Keyboard Pins
+#define KBD_CLK_PIN 11
+#define KBD_DATA_PIN 10
+
+//#define DEBUG 1
 
 // Function prototypes
 void initialiseHardware(void);
